@@ -1,13 +1,11 @@
-#manage_checkpoints.py
-
 #!/usr/bin/env python3
 """
-Script de gestion des checkpoints d'entraînement
+Script de gestion des checkpoints - VERSION NOMS FIXES
 Usage:
-    python manage_checkpoints.py --list                    # Liste les checkpoints
-    python manage_checkpoints.py --info <checkpoint.pt>    # Info sur un checkpoint
-    python manage_checkpoints.py --clean                   # Nettoie les vieux checkpoints
-    python manage_checkpoints.py --best                    # Info sur le meilleur checkpoint
+    python manage_checkpoints.py --info         # Info sur checkpoint.pt
+    python manage_checkpoints.py --best         # Info sur best_model.pt
+    python manage_checkpoints.py --compare      # Compare checkpoint vs best
+    python manage_checkpoints.py --validate     # Valide l'intégrité
 """
 
 import argparse
@@ -20,174 +18,287 @@ import json
 # Ajouter le chemin du projet
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DEFAULT_CHECKPOINT_DIR = "./IA/saved_models/my_llm/checkpoints"
+# Chemins fixes
+CHECKPOINT_DIR = Path("./IA/saved_models/my_llm/checkpoints")
+MODEL_DIR = Path("./IA/saved_models/my_llm")
 
-def list_checkpoints(checkpoint_dir: str):
-    """Liste tous les checkpoints"""
-    checkpoint_path = Path(checkpoint_dir)
+def format_size(bytes_size):
+    """Formate la taille"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_size < 1024.0:
+            return f"{bytes_size:.2f} {unit}"
+        bytes_size /= 1024.0
+    return f"{bytes_size:.2f} TB"
+
+def load_checkpoint_safe(path):
+    """Charge un checkpoint en mode sécurisé"""
+    try:
+        return torch.load(path, map_location='cpu', weights_only=False)
+    except:
+        return torch.load(path, map_location='cpu')
+
+def checkpoint_info():
+    """Affiche les détails de checkpoint.pt"""
+    checkpoint_path = CHECKPOINT_DIR / "checkpoint.pt"
     
     if not checkpoint_path.exists():
-        print(f"❌ Répertoire introuvable: {checkpoint_dir}")
+        print(f"\n❌ Checkpoint introuvable: {checkpoint_path}")
+        print("💡 Lancez l'entraînement pour créer un checkpoint")
         return
     
-    checkpoints = sorted(
-        checkpoint_path.glob("checkpoint_*.pt"),
-        key=lambda x: x.stat().st_mtime,
-        reverse=True
-    )
-    
-    if not checkpoints:
-        print("❌ Aucun checkpoint trouvé")
-        return
+    data = load_checkpoint_safe(checkpoint_path)
     
     print("\n" + "="*70)
-    print("📋 CHECKPOINTS DISPONIBLES")
+    print("📋 CHECKPOINT ACTUEL (checkpoint.pt)")
     print("="*70)
     
-    for i, cp in enumerate(checkpoints):
-        try:
-            data = torch.load(cp, map_location='cpu')
-        except:
-            data = torch.load(cp, map_location='cpu', weights_only=False)
-        
-        size_mb = cp.stat().st_size / (1024 * 1024)
-        
-        print(f"\n{i+1}. {cp.name}")
-        print(f"   📁 Taille: {size_mb:.2f} MB")
-        print(f"   📅 Date: {data.get('timestamp', 'unknown')}")
-        print(f"   🔢 Époque: {data.get('epoch', 0)}, Batch: {data.get('batch_idx', 0)}")
-        print(f"   📊 Train Loss: {data.get('train_loss', 0):.4f}")
-        print(f"   📉 Val Loss: {data.get('val_loss', 0):.4f}")
-    
-    print("\n" + "="*70)
-    print(f"Total: {len(checkpoints)} checkpoints")
-    
-    # Taille totale
-    total_size = sum(cp.stat().st_size for cp in checkpoints) / (1024 * 1024)
-    print(f"Espace utilisé: {total_size:.2f} MB")
-    print("="*70 + "\n")
-
-def checkpoint_info(checkpoint_path: str):
-    """Affiche les détails d'un checkpoint"""
-    cp_path = Path(checkpoint_path)
-    
-    if not cp_path.exists():
-        print(f"❌ Checkpoint introuvable: {checkpoint_path}")
-        return
-    
-    try:
-        data = torch.load(cp_path, map_location='cpu')
-    except:
-        data = torch.load(cp_path, map_location='cpu', weights_only=False)
-    
-    print("\n" + "="*70)
-    print(f"📋 DÉTAILS DU CHECKPOINT: {cp_path.name}")
-    print("="*70)
+    print(f"\n📁 Fichier:")
+    print(f"   Chemin: {checkpoint_path.absolute()}")
+    print(f"   Taille: {format_size(checkpoint_path.stat().st_size)}")
     
     print(f"\n📅 Métadonnées:")
     print(f"   Timestamp: {data.get('timestamp', 'unknown')}")
-    print(f"   Device: {data.get('device', 'unknown')}")
+    print(f"   Type: {data.get('checkpoint_type', 'unknown')}")
     
     print(f"\n🔢 Progression:")
     print(f"   Époque: {data.get('epoch', 0)}")
     print(f"   Batch: {data.get('batch_idx', 0)}")
     print(f"   Global Step: {data.get('global_step', 0)}")
+    print(f"   Total batches: {data.get('total_batches_processed', 0):,}")
     
     print(f"\n📊 Métriques:")
     print(f"   Train Loss: {data.get('train_loss', 0):.4f}")
     print(f"   Val Loss: {data.get('val_loss', 0):.4f}")
-    print(f"   Best Val Loss: {data.get('best_val_loss', 0):.4f}")
+    print(f"   Best Val Loss: {data.get('best_val_loss', float('inf')):.4f}")
     
     print(f"\n🔧 Configuration LoRA:")
     lora_cfg = data.get('lora_config', {})
     print(f"   Rank: {lora_cfg.get('rank', 'N/A')}")
     print(f"   Alpha: {lora_cfg.get('alpha', 'N/A')}")
     print(f"   Dropout: {lora_cfg.get('dropout', 'N/A')}")
+    print(f"   Target modules: {lora_cfg.get('target_modules', [])}")
     
     print(f"\n📚 Configuration Modèle:")
     model_cfg = data.get('model_config', {})
-    print(f"   Vocab Size: {model_cfg.get('vocab_size', 'N/A')}")
+    print(f"   Vocab Size: {model_cfg.get('vocab_size', 'N/A'):,}")
     print(f"   Embed Dim: {model_cfg.get('embed_dim', 'N/A')}")
     print(f"   Num Heads: {model_cfg.get('num_heads', 'N/A')}")
     print(f"   Num Layers: {model_cfg.get('num_layers', 'N/A')}")
+    print(f"   Max Seq Len: {model_cfg.get('max_seq_len', 'N/A')}")
     
     print(f"\n💾 Historique:")
     history = data.get('history', {})
-    print(f"   Total exemples: {history.get('total_qa_trained', 0):,}")
+    print(f"   Total exemples entraînés: {history.get('total_qa_trained', 0):,}")
     print(f"   Cycles complétés: {len(history.get('cycles', []))}")
     
-    size_mb = cp_path.stat().st_size / (1024 * 1024)
-    print(f"\n📁 Fichier:")
-    print(f"   Taille: {size_mb:.2f} MB")
-    print(f"   Chemin: {cp_path.absolute()}")
+    # Vérifier intégrité LoRA
+    if 'lora_state_dict' in data:
+        num_params = sum(p.numel() for p in data['lora_state_dict'].values())
+        print(f"\n✅ Poids LoRA présents: {num_params:,} paramètres")
+    else:
+        print(f"\n⚠️  Poids LoRA manquants!")
+    
+    # Vérifier optimizer
+    if 'optimizer_state_dict' in data:
+        print(f"✅ État optimiseur présent")
+    else:
+        print(f"⚠️  État optimiseur manquant!")
     
     print("="*70 + "\n")
 
-def show_best_checkpoint(checkpoint_dir: str):
-    """Affiche le meilleur checkpoint"""
-    best_path = Path(checkpoint_dir) / "best_checkpoint.pt"
+def best_checkpoint_info():
+    """Affiche les détails de best_model.pt"""
+    best_path = CHECKPOINT_DIR / "best_model.pt"
     
     if not best_path.exists():
-        print("❌ Aucun 'best checkpoint' trouvé")
+        print(f"\n❌ Meilleur modèle introuvable: {best_path}")
+        print("💡 Sera créé quand val_loss s'améliore")
         return
     
-    checkpoint_info(str(best_path))
+    data = load_checkpoint_safe(best_path)
+    
+    print("\n" + "="*70)
+    print("🏆 MEILLEUR MODÈLE (best_model.pt)")
+    print("="*70)
+    
+    print(f"\n📁 Fichier:")
+    print(f"   Taille: {format_size(best_path.stat().st_size)}")
+    
+    print(f"\n📅 Sauvegardé le: {data.get('timestamp', 'unknown')}")
+    
+    print(f"\n🔢 Époque: {data.get('epoch', 0)}")
+    
+    print(f"\n📊 Métriques:")
+    print(f"   Train Loss: {data.get('train_loss', 0):.4f}")
+    print(f"   Val Loss: {data.get('val_loss', 0):.4f} 🏆")
+    print(f"   Best Val Loss: {data.get('best_val_loss', float('inf')):.4f}")
+    
+    print("="*70 + "\n")
 
-def clean_old_checkpoints(checkpoint_dir: str, keep_last: int = 3):
-    """Nettoie les vieux checkpoints"""
-    checkpoint_path = Path(checkpoint_dir)
+def compare_checkpoints():
+    """Compare checkpoint.pt et best_model.pt"""
+    checkpoint_path = CHECKPOINT_DIR / "checkpoint.pt"
+    best_path = CHECKPOINT_DIR / "best_model.pt"
     
     if not checkpoint_path.exists():
-        print(f"❌ Répertoire introuvable: {checkpoint_dir}")
+        print("❌ checkpoint.pt introuvable")
         return
     
-    checkpoints = sorted(
-        [f for f in checkpoint_path.glob("checkpoint_epoch*.pt")],
-        key=lambda x: x.stat().st_mtime
-    )
-    
-    if len(checkpoints) <= keep_last:
-        print(f"✅ Seulement {len(checkpoints)} checkpoints, rien à nettoyer")
+    if not best_path.exists():
+        print("❌ best_model.pt introuvable")
         return
     
-    to_delete = checkpoints[:-keep_last]
-    total_size = sum(cp.stat().st_size for cp in to_delete) / (1024 * 1024)
+    current = load_checkpoint_safe(checkpoint_path)
+    best = load_checkpoint_safe(best_path)
     
-    print(f"\n🗑️  NETTOYAGE DES CHECKPOINTS")
-    print(f"Garder les {keep_last} derniers")
-    print(f"Supprimer {len(to_delete)} checkpoints ({total_size:.2f} MB)")
+    print("\n" + "="*70)
+    print("⚖️  COMPARAISON CHECKPOINT vs BEST")
+    print("="*70)
     
-    response = input("\nConfirmer? (o/n): ").lower().strip()
+    print(f"\n📊 Val Loss:")
+    current_val = current.get('val_loss', float('inf'))
+    best_val = best.get('val_loss', float('inf'))
     
-    if response in ['o', 'oui', 'y', 'yes']:
-        for cp in to_delete:
-            cp.unlink()
-            print(f"   ✓ Supprimé: {cp.name}")
-        print(f"\n✅ {len(to_delete)} checkpoints supprimés ({total_size:.2f} MB libérés)")
+    print(f"   Checkpoint actuel: {current_val:.4f}")
+    print(f"   Meilleur modèle:   {best_val:.4f} 🏆")
+    
+    if current_val < best_val:
+        improvement = best_val - current_val
+        print(f"\n✅ AMÉLIORATION: -{improvement:.4f} ({improvement/best_val*100:.2f}%)")
+        print(f"💡 Le meilleur modèle sera mis à jour à la prochaine époque")
+    elif current_val > best_val:
+        degradation = current_val - best_val
+        print(f"\n⚠️  DÉGRADATION: +{degradation:.4f} ({degradation/best_val*100:.2f}%)")
+        print(f"💡 Continuez l'entraînement ou rechargez best_model.pt")
     else:
-        print("❌ Annulé")
+        print(f"\n➡️  IDENTIQUE")
+    
+    print(f"\n📈 Progression:")
+    print(f"   Checkpoint: Époque {current.get('epoch', 0)}, Batch {current.get('batch_idx', 0)}")
+    print(f"   Best:       Époque {best.get('epoch', 0)}")
+    
+    print(f"\n📅 Dates:")
+    print(f"   Checkpoint: {current.get('timestamp', 'unknown')}")
+    print(f"   Best:       {best.get('timestamp', 'unknown')}")
+    
+    print("="*70 + "\n")
+
+def validate_integrity():
+    """Valide l'intégrité de tous les fichiers"""
+    print("\n" + "="*70)
+    print("🔍 VALIDATION INTÉGRITÉ")
+    print("="*70)
+    
+    files_to_check = {
+        "checkpoint.pt": CHECKPOINT_DIR / "checkpoint.pt",
+        "best_model.pt": CHECKPOINT_DIR / "best_model.pt",
+        "model.pt": MODEL_DIR / "model.pt",
+        "lora_weights.pt": MODEL_DIR / "lora_weights.pt"
+    }
+    
+    results = {}
+    
+    for name, path in files_to_check.items():
+        print(f"\n📄 Vérification: {name}")
+        
+        if not path.exists():
+            print(f"   ❌ Fichier absent")
+            results[name] = "missing"
+            continue
+        
+        try:
+            data = load_checkpoint_safe(path)
+            
+            # Vérifications spécifiques
+            if name in ["checkpoint.pt", "best_model.pt"]:
+                required_keys = ['epoch', 'lora_state_dict', 'optimizer_state_dict']
+                missing = [k for k in required_keys if k not in data]
+                
+                if missing:
+                    print(f"   ⚠️  Clés manquantes: {missing}")
+                    results[name] = "incomplete"
+                else:
+                    print(f"   ✅ Structure valide")
+                    print(f"   📊 Loss: {data.get('val_loss', 0):.4f}")
+                    results[name] = "valid"
+            
+            elif name == "model.pt":
+                num_params = sum(p.numel() for p in data.values())
+                print(f"   ✅ Valide ({num_params:,} paramètres)")
+                results[name] = "valid"
+            
+            elif name == "lora_weights.pt":
+                if 'lora_layers' in data:
+                    num_params = sum(p.numel() for p in data['lora_layers'].values())
+                    print(f"   ✅ Valide ({num_params:,} paramètres LoRA)")
+                    results[name] = "valid"
+                else:
+                    print(f"   ⚠️  Format invalide")
+                    results[name] = "invalid"
+        
+        except Exception as e:
+            print(f"   ❌ Erreur: {e}")
+            results[name] = "error"
+    
+    # Résumé
+    print(f"\n{'='*70}")
+    print("📋 RÉSUMÉ")
+    print("="*70)
+    
+    valid_count = sum(1 for v in results.values() if v == "valid")
+    total_count = len(results)
+    
+    for name, status in results.items():
+        emoji = {
+            "valid": "✅",
+            "incomplete": "⚠️ ",
+            "invalid": "❌",
+            "missing": "❌",
+            "error": "❌"
+        }.get(status, "❓")
+        
+        print(f"   {emoji} {name}: {status}")
+    
+    print(f"\n📊 Score: {valid_count}/{total_count} fichiers valides")
+    
+    if valid_count == total_count:
+        print(f"✅ SYSTÈME COMPLET ET FONCTIONNEL")
+    elif results.get("checkpoint.pt") == "valid":
+        print(f"⚠️  SYSTÈME PARTIEL - Reprise possible")
+    else:
+        print(f"❌ SYSTÈME INCOMPLET - Nouvel entraînement requis")
+    
+    print("="*70 + "\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Gestion des checkpoints d'entraînement")
-    parser.add_argument("--dir", default=DEFAULT_CHECKPOINT_DIR, help="Répertoire des checkpoints")
-    parser.add_argument("--list", action="store_true", help="Liste tous les checkpoints")
-    parser.add_argument("--info", type=str, help="Info détaillée sur un checkpoint")
-    parser.add_argument("--best", action="store_true", help="Info sur le meilleur checkpoint")
-    parser.add_argument("--clean", action="store_true", help="Nettoie les vieux checkpoints")
-    parser.add_argument("--keep", type=int, default=3, help="Nombre de checkpoints à garder (défaut: 3)")
+    parser = argparse.ArgumentParser(
+        description="Gestion des checkpoints avec noms fixes"
+    )
+    
+    parser.add_argument("--info", action="store_true", 
+                       help="Info sur checkpoint.pt")
+    parser.add_argument("--best", action="store_true", 
+                       help="Info sur best_model.pt")
+    parser.add_argument("--compare", action="store_true", 
+                       help="Compare checkpoint vs best")
+    parser.add_argument("--validate", action="store_true", 
+                       help="Valide l'intégrité de tous les fichiers")
     
     args = parser.parse_args()
     
-    if args.list:
-        list_checkpoints(args.dir)
-    elif args.info:
-        checkpoint_info(args.info)
+    if args.info:
+        checkpoint_info()
     elif args.best:
-        show_best_checkpoint(args.dir)
-    elif args.clean:
-        clean_old_checkpoints(args.dir, args.keep)
+        best_checkpoint_info()
+    elif args.compare:
+        compare_checkpoints()
+    elif args.validate:
+        validate_integrity()
     else:
-        parser.print_help()
+        # Par défaut, afficher checkpoint info
+        print("💡 Usage: python manage_checkpoints.py [--info|--best|--compare|--validate]")
+        print("\nAffichage par défaut:\n")
+        checkpoint_info()
 
 if __name__ == "__main__":
     main()
