@@ -1,7 +1,7 @@
 """
 Système d'entraînement avec LoRA (Low-Rank Adaptation) + Instruction Tuning - VERSION CORRIGÉE
 CORRECTION du bug: RuntimeError: element 0 of tensors does not require grad
-
+#LoRAFineTuning.py
 Changements principaux vs version bugguée:
 - ✅ Correction du forward pass LoRA avec gestion device
 - ✅ Hooks LoRA corrigés pour GPU
