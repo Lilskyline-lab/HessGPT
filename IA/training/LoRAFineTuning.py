@@ -66,7 +66,7 @@ DEFAULT_MODEL_DIR = os.path.join(
 DEFAULT_TOKENIZER_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "Tokenizer",
-    "tokenizer_5k.bin"
+    "tokenizer_20k_production.bin"
 )
 
 if not os.path.exists(DEFAULT_TOKENIZER_PATH):
