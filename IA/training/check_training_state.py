@@ -1,4 +1,4 @@
-
+#check_training_state.py
 #!/usr/bin/env python3
 """
 Script rapide pour vérifier l'état d'entraînement (pour Colab)
