@@ -1,12 +1,12 @@
 """
-Système d'entraînement avec LoRA (Low-Rank Adaptation) + Instruction Tuning - VERSION CORRIGÉE
-CORRECTION du bug: RuntimeError: element 0 of tensors does not require grad
-#LoRAFineTuning.py
-Changements principaux vs version bugguée:
-- ✅ Correction du forward pass LoRA avec gestion device
-- ✅ Hooks LoRA corrigés pour GPU
-- ✅ Vérification gradient avant backward
-- ✅ Ajout de la propriété device à LoRAWrapper
+Système d'entraînement avec LoRA (Low-Rank Adaptation) + Instruction Tuning
+VERSION CORRIGÉE avec CHECKPOINTING À NOMS FIXES
+
+Corrections principales:
+- ✅ Noms de fichiers FIXES (checkpoint.pt, model.pt, best_model.pt)
+- ✅ Reprise d'entraînement robuste
+- ✅ Gestion device et gradients LoRA
+- ✅ Sauvegarde atomique anti-corruption
 """
 
 import os
@@ -241,7 +241,7 @@ class LoRALayer(nn.Module):
 
 
 class LoRAWrapper(nn.Module):
-    """Wrapper LoRA avec gestion robuste - VERSION CORRIGÉE"""
+    """Wrapper LoRA avec gestion robuste"""
 
     def __init__(self, base_model: nn.Module, config: LoRAConfig):
         super().__init__()
@@ -249,7 +249,7 @@ class LoRAWrapper(nn.Module):
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # CORRECTION 1: Ajouter la propriété device
+        # Propriété device
         self._device = next(base_model.parameters()).device
 
         # Geler le modèle de base
@@ -271,7 +271,7 @@ class LoRAWrapper(nn.Module):
 
     @property
     def device(self):
-        """CORRECTION 2: Propriété device pour accès externe"""
+        """Propriété device pour accès externe"""
         return self._device
 
     def _inject_lora(self) -> None:
@@ -289,7 +289,6 @@ class LoRAWrapper(nn.Module):
                         dropout=self.config.dropout,
                         train_bias=self.config.train_bias
                     )
-                    # Mettre la couche LoRA sur le même device
                     lora_layer.to(self._device)
 
                     safe_name = name.replace('.', '_')
@@ -304,20 +303,17 @@ class LoRAWrapper(nn.Module):
 
     @contextmanager
     def _attach_hooks(self) -> Iterator[None]:
-        """CORRECTION 3: Hooks corrigés avec gestion device et gradient"""
+        """Hooks corrigés avec gestion device et gradient"""
         handles = []
 
         def make_hook(lora_layer: LoRALayer) -> Callable:
             def hook(module, input, output):
                 try:
-                    # S'assurer que tout est sur le bon device
                     x = input[0].to(lora_layer.lora_A.device)
                     output = output.to(lora_layer.lora_A.device)
 
-                    # Calculer l'output LoRA
                     lora_out = lora_layer(x, output)
 
-                    # IMPORTANT: S'assurer que le gradient est activé en mode training
                     if self.training and not lora_out.requires_grad:
                         lora_out = lora_out.requires_grad_(True)
 
@@ -342,8 +338,7 @@ class LoRAWrapper(nn.Module):
                 handle.remove()
 
     def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
-        """CORRECTION 4: Forward pass avec gestion device explicite"""
-        # S'assurer que les tenseurs sont sur le bon device
+        """Forward pass avec gestion device explicite"""
         input_ids = input_ids.to(self._device)
         if attention_mask is not None:
             attention_mask = attention_mask.to(self._device)
@@ -605,11 +600,11 @@ def collate_fn(batch: List[Dict[str, Any]], pad_id: int = 0) -> Dict[str, torch.
 
 
 # ============================================================================
-# TRAINER CORRIGÉ
+# TRAINER AVEC CHECKPOINTING À NOMS FIXES
 # ============================================================================
 
 class LoRATrainerPro:
-    """Trainer LoRA simplifié - VERSION CORRIGÉE"""
+    """Trainer LoRA avec système de checkpointing robuste"""
 
     def __init__(
         self,
@@ -734,180 +729,152 @@ class LoRATrainerPro:
         lightweight: bool = True
     ):
         """
-        Sauvegarde un checkpoint optimisé de l'état d'entraînement
+        Sauvegarde avec NOMS FIXES - VERSION CORRIGÉE
         
-        Args:
-            epoch: Époque actuelle
-            batch_idx: Index du batch actuel
-            optimizer: Optimiseur PyTorch
-            train_loss: Loss d'entraînement
-            val_loss: Loss de validation
-            is_best: Si c'est le meilleur checkpoint
-            lightweight: Si True, sauvegarde seulement l'état (pas le modèle complet)
+        Fichiers créés:
+        - checkpoint.pt : État actuel (NOM FIXE)
+        - model.pt : Modèle fusionné (fin d'époque)
+        - best_model.pt : Meilleur modèle
         """
+        
+        # Créer le checkpoint
+        checkpoint = {
+            # Progression
+            'epoch': epoch,
+            'batch_idx': batch_idx,
+            'global_step': epoch * 10000 + batch_idx,
+            
+            # États
+            'optimizer_state_dict': optimizer.state_dict(),
+            'lora_state_dict': self.model.lora_layers.state_dict(),
+            
+            # Métriques
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'best_val_loss': self.history.get('best_val_loss', float('inf')),
+            
+            # Configuration
+            'lora_config': asdict(self.lora_config),
+            'model_config': self.config,
+            'history': self.history,
+            
+            # Métadonnées
+            'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+            'total_batches_processed': epoch * 10000 + batch_idx,
+            'checkpoint_type': 'lightweight' if lightweight else 'full'
+        }
+        
+        # ⭐ NOM FIXE: Toujours "checkpoint.pt"
+        checkpoint_path = self.checkpoint_dir / "checkpoint.pt"
+        
+        # Sauvegarde atomique (évite corruption si interruption)
+        temp_path = checkpoint_path.with_suffix('.tmp')
+        torch.save(checkpoint, temp_path)
+        temp_path.replace(checkpoint_path)
+        
         if lightweight:
-            # Checkpoint LÉGER : seulement l'état d'entraînement (< 1MB)
-            checkpoint = {
-                # Progression de l'entraînement (CRUCIAL pour reprendre)
-                'epoch': epoch,
-                'batch_idx': batch_idx,
-                'global_step': epoch * 10000 + batch_idx,  # Estimation
-                
-                # État de l'optimiseur
-                'optimizer_state_dict': optimizer.state_dict(),
-                
-                # Métriques
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'best_val_loss': self.history.get('best_val_loss', float('inf')),
-                
-                # Métadonnées
-                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'total_batches_processed': epoch * 10000 + batch_idx,
-            }
-            
-            # Sauvegarder dans un fichier temporaire léger
-            state_path = self.checkpoint_dir / "training_state.pt"
-            torch.save(checkpoint, state_path)
-            
-            # Garder aussi une copie de backup
-            backup_path = self.checkpoint_dir / f"state_backup_epoch{epoch}_batch{batch_idx}.pt"
-            torch.save(checkpoint, backup_path)
-            
-            self.logger.info(f"💾 État d'entraînement sauvegardé (batch {batch_idx})")
-            
-            # Nettoyer les vieux backups (garder seulement les 5 derniers)
-            self._cleanup_old_states(keep_last=5)
-            
+            self.logger.info(f"💾 Checkpoint léger sauvegardé (batch {batch_idx})")
         else:
-            # Checkpoint COMPLET : modèle + état (pour fin d'époque)
-            checkpoint_path = self.checkpoint_dir / f"model_epoch{epoch}.pt"
+            self.logger.info(f"💾 Checkpoint complet sauvegardé (époque {epoch})")
             
-            checkpoint = {
-                # État du modèle LoRA SEULEMENT (pas le modèle de base)
-                'lora_state_dict': self.model.lora_layers.state_dict(),
-                
-                # État de l'optimiseur
-                'optimizer_state_dict': optimizer.state_dict(),
-                
-                # Progression
-                'epoch': epoch,
-                'batch_idx': batch_idx,
-                
-                # Métriques
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'best_val_loss': self.history.get('best_val_loss', float('inf')),
-                
-                # Configuration
-                'lora_config': asdict(self.lora_config),
-                'model_config': self.config,
-                
-                # Historique
-                'history': self.history,
-                
-                # Métadonnées
-                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            
-            torch.save(checkpoint, checkpoint_path)
-            self.logger.info(f"💾 Checkpoint modèle complet sauvegardé: {checkpoint_path}")
-            
-            # Si c'est le meilleur, sauvegarder séparément
-            if is_best:
-                best_checkpoint_path = self.checkpoint_dir / "best_model.pt"
-                torch.save(checkpoint, best_checkpoint_path)
-                self.logger.info(f"🏆 Meilleur modèle sauvegardé: {best_checkpoint_path}")
+            # En fin d'époque, sauvegarder aussi model.pt fusionné
+            merged_path = self.model_dir / "model.pt"
+            self.model.merge_and_save_full_model(str(merged_path))
+            self.logger.info(f"   Modèle fusionné: {merged_path}")
+        
+        # Si meilleur modèle
+        if is_best:
+            best_path = self.checkpoint_dir / "best_model.pt"
+            torch.save(checkpoint, best_path)
+            self.logger.info(f"🏆 Meilleur modèle: {best_path}")
+        
+        self.logger.info(f"   Taille: {checkpoint_path.stat().st_size / (1024*1024):.2f} MB")
         
         return True
 
-    def _cleanup_old_checkpoints(self, keep_last: int = 3):
-        """Supprime les vieux checkpoints pour économiser l'espace disque"""
-        checkpoints = sorted(
-            [f for f in self.checkpoint_dir.glob("checkpoint_epoch*.pt")],
-            key=lambda x: x.stat().st_mtime
-        )
-        
-        # Garder seulement les N derniers
-        if len(checkpoints) > keep_last:
-            for old_checkpoint in checkpoints[:-keep_last]:
-                old_checkpoint.unlink()
-                self.logger.debug(f"🗑️ Ancien checkpoint supprimé: {old_checkpoint.name}")
-
-    def _cleanup_old_states(self, keep_last: int = 5):
-        """Supprime les vieux états d'entraînement"""
-        states = sorted(
-            [f for f in self.checkpoint_dir.glob("state_backup_*.pt")],
-            key=lambda x: x.stat().st_mtime
-        )
-        
-        if len(states) > keep_last:
-            for old_state in states[:-keep_last]:
-                old_state.unlink()
-                self.logger.debug(f"🗑️ Ancien état supprimé: {old_state.name}")
-
     def load_checkpoint(self, checkpoint_path: Optional[str] = None) -> bool:
         """
-        Charge l'état d'entraînement pour reprendre (optimisé pour Colab)
+        Charge checkpoint avec NOM FIXE - VERSION CORRIGÉE
         
-        Args:
-            checkpoint_path: Chemin du checkpoint (None = dernier état)
-            
         Returns:
-            True si un checkpoint a été chargé, False sinon
+            True si chargé, False sinon
         """
+        
+        # ⭐ Toujours chercher "checkpoint.pt"
         if checkpoint_path is None:
-            # Chercher d'abord l'état léger
-            checkpoint_path = self.checkpoint_dir / "training_state.pt"
-            
-            # Si pas trouvé, chercher un backup
-            if not checkpoint_path.exists():
-                backups = sorted(
-                    self.checkpoint_dir.glob("state_backup_*.pt"),
-                    key=lambda x: x.stat().st_mtime,
-                    reverse=True
-                )
-                if backups:
-                    checkpoint_path = backups[0]
-                else:
-                    self.logger.info("Aucun état d'entraînement trouvé, démarrage depuis le début")
-                    return False
+            checkpoint_path = self.checkpoint_dir / "checkpoint.pt"
         else:
             checkpoint_path = Path(checkpoint_path)
         
+        # Vérifier existence
         if not checkpoint_path.exists():
-            self.logger.info("Aucun checkpoint trouvé, démarrage d'un nouvel entraînement")
+            self.logger.info("📭 Aucun checkpoint trouvé - nouvel entraînement")
             return False
         
-        self.logger.info(f"📂 Chargement état d'entraînement: {checkpoint_path.name}")
+        self.logger.info(f"📂 Chargement: {checkpoint_path.name}")
         
+        # Charger
         try:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        except TypeError:
+        except:
             checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         
-        # Sauvegarder l'état pour utilisation dans train_one_cycle
-        self.training_state = {
-            'epoch': checkpoint.get('epoch', 0),
-            'batch_idx': checkpoint.get('batch_idx', 0),
-            'global_step': checkpoint.get('global_step', 0),
-            'optimizer_state_dict': checkpoint.get('optimizer_state_dict'),
-            'train_loss': checkpoint.get('train_loss', 0.0),
-            'val_loss': checkpoint.get('val_loss', 0.0),
-            'total_batches_processed': checkpoint.get('total_batches_processed', 0)
-        }
+        # Vérifier intégrité
+        required_keys = ['epoch', 'batch_idx', 'optimizer_state_dict', 'lora_state_dict']
+        missing = [k for k in required_keys if k not in checkpoint]
         
-        self.logger.info("✅ État d'entraînement chargé avec succès!")
-        self.logger.info(f"   Reprise à l'époque {self.training_state['epoch']}, batch {self.training_state['batch_idx']}")
-        self.logger.info(f"   Total batches déjà traités: {self.training_state['total_batches_processed']}")
-        self.logger.info(f"   Loss précédente: {self.training_state['val_loss']:.4f}")
+        if missing:
+            self.logger.warning(f"⚠️  Clés manquantes: {missing}")
+            return False
+        
+        # Extraire les infos
+        epoch = checkpoint['epoch']
+        batch_idx = checkpoint['batch_idx']
+        train_loss = checkpoint.get('train_loss', 0.0)
+        val_loss = checkpoint.get('val_loss', 0.0)
+        total_batches = checkpoint.get('total_batches_processed', 0)
+        
+        # Affichage
+        print("\n" + "="*70)
+        print("✅ CHECKPOINT CHARGÉ")
+        print("="*70)
+        print(f"📅 Date: {checkpoint.get('timestamp', 'inconnu')}")
+        print(f"🔢 Époque: {epoch}, Batch: {batch_idx}")
+        print(f"📊 Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        print(f"📈 Total batches: {total_batches:,}")
+        print(f"\n💡 Reprise au batch {batch_idx + 1}")
+        print("="*70 + "\n")
+        
+        # Charger LoRA
+        try:
+            self.model.lora_layers.load_state_dict(checkpoint['lora_state_dict'], strict=False)
+            self.logger.info("✅ Poids LoRA restaurés")
+        except Exception as e:
+            self.logger.error(f"❌ Erreur LoRA: {e}")
+            return False
+        
+        # Restaurer historique
+        if 'history' in checkpoint:
+            self.history = checkpoint['history']
+        if 'best_val_loss' in checkpoint:
+            self.history['best_val_loss'] = checkpoint['best_val_loss']
+        
+        # Sauvegarder l'état pour train_one_cycle
+        self.training_state = {
+            'epoch': epoch,
+            'batch_idx': batch_idx,
+            'optimizer_state_dict': checkpoint['optimizer_state_dict'],
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'total_batches_processed': total_batches
+        }
         
         return True
 
     def get_checkpoint_info(self, checkpoint_path: Optional[str] = None) -> Dict:
         """Affiche les informations d'un checkpoint"""
         if checkpoint_path is None:
-            checkpoint_path = self.checkpoint_dir / "last_checkpoint.pt"
+            checkpoint_path = self.checkpoint_dir / "checkpoint.pt"
         else:
             checkpoint_path = Path(checkpoint_path)
         
@@ -1035,7 +1002,7 @@ class LoRATrainerPro:
         return dataset
 
     def train_one_cycle(self, resume_from_checkpoint: bool = True):
-        """CORRECTION 5: Training loop avec vérification gradient et checkpointing"""
+        """Training loop avec reprise robuste - VERSION CORRIGÉE"""
         cycle_num = len(self.history["cycles"]) + 1
         print("\n" + "="*70)
         print(f"🔄 CYCLE D'ENTRAÎNEMENT #{cycle_num}")
@@ -1050,13 +1017,18 @@ class LoRATrainerPro:
         self.logger.info(f"DÉBUT CYCLE D'ENTRAÎNEMENT #{cycle_num}")
         self.logger.info("="*60)
 
-        # Tenter de charger un checkpoint si demandé
+        # Variables de reprise
         start_epoch = 0
         start_batch_idx = 0
+        optimizer_state = None
+        
+        # Tenter de charger checkpoint si demandé
         if resume_from_checkpoint:
             if self.load_checkpoint():
                 start_epoch = self.training_state['epoch']
                 start_batch_idx = self.training_state['batch_idx']
+                optimizer_state = self.training_state.get('optimizer_state_dict')
+                
                 print(f"\n🔄 REPRISE D'ENTRAÎNEMENT")
                 print(f"   Époque: {start_epoch}/{self.training_config.epochs}")
                 print(f"   Batch: {start_batch_idx}")
@@ -1083,7 +1055,7 @@ class LoRATrainerPro:
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.training_config.batch_size,
-            shuffle=True,
+            shuffle=(start_batch_idx == 0),  # Shuffle seulement au début
             collate_fn=collate_fn,
             num_workers=0,
             pin_memory=True if self.device.type == 'cuda' else False
@@ -1097,7 +1069,7 @@ class LoRATrainerPro:
             pin_memory=True if self.device.type == 'cuda' else False
         )
 
-        # Optimizer - IMPORTANT: Vérifier qu'il y a des paramètres à optimiser
+        # Optimizer
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         if len(trainable_params) == 0:
             raise RuntimeError("❌ Aucun paramètre trainable trouvé dans le modèle!")
@@ -1110,10 +1082,13 @@ class LoRATrainerPro:
             weight_decay=self.training_config.weight_decay
         )
 
-        # Restaurer l'état de l'optimiseur si checkpoint
-        if self.training_state and 'optimizer_state_dict' in self.training_state:
-            optimizer.load_state_dict(self.training_state['optimizer_state_dict'])
-            self.logger.info("✅ État de l'optimiseur restauré")
+        # Restaurer l'état de l'optimiseur si disponible
+        if optimizer_state is not None:
+            try:
+                optimizer.load_state_dict(optimizer_state)
+                self.logger.info("✅ État optimiseur restauré")
+            except Exception as e:
+                self.logger.warning(f"⚠️  Impossible de restaurer l'optimiseur: {e}")
 
         # Loss
         loss_fn = CrossEntropyLoss(ignore_index=-100)
@@ -1146,14 +1121,13 @@ class LoRATrainerPro:
                     # Loss calculation
                     loss = loss_fn(logits.view(-1, self.config["vocab_size"]), labels.view(-1))
 
-                    # CORRECTION CRITIQUE: Vérification du gradient avant backward
+                    # Vérification du gradient
                     if not loss.requires_grad:
                         self.logger.error(f"❌ ERREUR GRADIENT - Batch {batch_idx}")
                         self.logger.error(f"   - loss.requires_grad: {loss.requires_grad}")
                         self.logger.error(f"   - logits.requires_grad: {logits.requires_grad}")
                         self.logger.error(f"   - Params LoRA requiring grad: {sum(p.requires_grad for p in self.model.lora_layers.parameters())}")
 
-                        # Diagnostique supplémentaire
                         for name, param in self.model.lora_layers.named_parameters():
                             self.logger.error(f"   - {name}: requires_grad={param.requires_grad}, device={param.device}")
 
@@ -1176,7 +1150,7 @@ class LoRATrainerPro:
                     batch_count += 1
                     pbar.set_postfix({"loss": f"{loss.item():.4f}", "avg_loss": f"{epoch_loss/batch_count:.4f}"})
 
-                    # 🎯 CHECKPOINT LÉGER tous les 1000 batches (optimisé Colab)
+                    # ⭐ CHECKPOINT LÉGER tous les 1000 batches
                     if (batch_idx + 1) % 1000 == 0:
                         self.save_checkpoint(
                             epoch=epoch,
@@ -1185,9 +1159,9 @@ class LoRATrainerPro:
                             train_loss=epoch_loss / batch_count,
                             val_loss=best_val_loss,
                             is_best=False,
-                            lightweight=True  # Sauvegarde légère
+                            lightweight=True
                         )
-                        self.logger.info(f"💾 État sauvegardé au batch {batch_idx + 1}")
+                        print(f"\n💾 Checkpoint sauvegardé (batch {batch_idx + 1})")
 
                 except RuntimeError as e:
                     self.logger.error(f"Erreur lors du batch {batch_idx}: {e}")
@@ -1199,7 +1173,8 @@ class LoRATrainerPro:
                         optimizer=optimizer,
                         train_loss=epoch_loss / max(batch_count, 1),
                         val_loss=best_val_loss,
-                        is_best=False
+                        is_best=False,
+                        lightweight=True
                     )
                     raise
 
@@ -1240,7 +1215,7 @@ class LoRATrainerPro:
                 f"PPL={avg_ppl:.2f}, Acc={avg_acc:.3f}"
             )
 
-            # 💾 CHECKPOINT COMPLET en fin d'époque (modèle LoRA)
+            # ⭐ CHECKPOINT COMPLET en fin d'époque
             is_best = avg_val_loss < best_val_loss
             self.save_checkpoint(
                 epoch=epoch + 1,
@@ -1249,7 +1224,7 @@ class LoRATrainerPro:
                 train_loss=avg_train_loss,
                 val_loss=avg_val_loss,
                 is_best=is_best,
-                lightweight=False  # Sauvegarde complète du modèle
+                lightweight=False  # Sauvegarde complète avec model.pt
             )
             self.logger.info(f"💾 Modèle complet sauvegardé (époque {epoch + 1})")
 
@@ -1259,15 +1234,14 @@ class LoRATrainerPro:
                 self.history["best_val_loss"] = best_val_loss
                 self.logger.info(f"✅ Nouvelle meilleure val loss: {best_val_loss:.4f}")
 
-        # Save final
+            # Reset start_batch_idx pour les époques suivantes
+            start_batch_idx = 0
+
+        # Save final LoRA weights
         lora_path = self.model_dir / LORA_WEIGHTS_FILENAME
         self.model.save_lora_weights(str(lora_path))
 
-        # Merge et sauvegarder
-        merged_path = self.model_dir / "model.pt"
-        self.model.merge_and_save_full_model(str(merged_path))
-
-        self.logger.info(f"📁 CHEMIN COMPLET: {os.path.abspath(merged_path)}")
+        self.logger.info(f"📁 CHEMIN COMPLET: {os.path.abspath(self.model_dir / 'model.pt')}")
 
         # History
         cycle_info = {
@@ -1294,7 +1268,8 @@ class LoRATrainerPro:
         print(f"   • Perplexity: {avg_ppl:.2f}")
         print(f"   • Accuracy:   {avg_acc:.3%}")
         print(f"\n💾 Fichiers sauvegardés:")
-        print(f"   • Modèle fusionné: {merged_path}")
+        print(f"   • Modèle fusionné: {self.model_dir}/model.pt")
+        print(f"   • Checkpoint: {self.checkpoint_dir}/checkpoint.pt")
         print(f"   • Poids LoRA: {lora_path}")
         print(f"\n📈 Progression totale:")
         print(f"   • Cycles complétés: {cycle_info['cycle']}")
@@ -1307,7 +1282,7 @@ class LoRATrainerPro:
         self.logger.info("="*60)
         self.logger.info(f"CYCLE {cycle_info['cycle']} TERMINÉ")
         self.logger.info(f"Val Loss: {avg_val_loss:.4f}, Best: {best_val_loss:.4f}")
-        self.logger.info(f"Modèle sauvegardé: {merged_path}")
+        self.logger.info(f"Modèle sauvegardé: {self.model_dir}/model.pt")
         self.logger.info("="*60)
 
         return cycle_info
@@ -1345,15 +1320,7 @@ class LoRATrainerPro:
         epochs: int = 1,
         learning_rate: float = 1.41e-5
     ):
-        """
-        Lance l'entraînement RLHF après le fine-tuning LoRA
-
-        Args:
-            max_samples: Nombre d'exemples du dataset Anthropic
-            batch_size: Taille du batch
-            epochs: Nombre d'époques RLHF
-            learning_rate: Taux d'apprentissage
-        """
+        """Lance l'entraînement RLHF après le fine-tuning LoRA"""
         print("\n" + "="*70)
         print("🎯 LANCEMENT ENTRAÎNEMENT RLHF")
         print("="*70)
@@ -1402,42 +1369,9 @@ class LoRATrainerPro:
 # MAIN
 # ============================================================================
 
-def list_checkpoints(trainer):
-    """Liste tous les checkpoints disponibles"""
-    checkpoints = sorted(
-        trainer.checkpoint_dir.glob("checkpoint_*.pt"),
-        key=lambda x: x.stat().st_mtime,
-        reverse=True
-    )
-    
-    if not checkpoints:
-        print("\n❌ Aucun checkpoint trouvé")
-        return
-    
-    print("\n" + "="*70)
-    print("📋 CHECKPOINTS DISPONIBLES")
-    print("="*70)
-    
-    for i, checkpoint_path in enumerate(checkpoints[:10]):  # Max 10
-        info = trainer.get_checkpoint_info(str(checkpoint_path))
-        print(f"\n{i+1}. {checkpoint_path.name}")
-        print(f"   Époque: {info.get('epoch', 0)}, Batch: {info.get('batch_idx', 0)}")
-        print(f"   Train Loss: {info.get('train_loss', 0):.4f}, Val Loss: {info.get('val_loss', 0):.4f}")
-        print(f"   Date: {info.get('timestamp', 'unknown')}")
-    
-    # Info sur best checkpoint
-    best_path = trainer.checkpoint_dir / "best_checkpoint.pt"
-    if best_path.exists():
-        info = trainer.get_checkpoint_info(str(best_path))
-        print(f"\n🏆 MEILLEUR CHECKPOINT:")
-        print(f"   Val Loss: {info.get('val_loss', 0):.4f}")
-        print(f"   Époque: {info.get('epoch', 0)}")
-    
-    print("="*70 + "\n")
-
 def main():
     print("\n" + "="*70)
-    print("🚀 LoRA TRAINING PRO - VERSION CORRIGÉE 10/10 + CHECKPOINTING")
+    print("🚀 LoRA TRAINING PRO - VERSION NOMS FIXES")
     print("="*70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1487,25 +1421,34 @@ def main():
             training_config=training_config
         )
 
-        # Vérifier si des checkpoints existent
-        last_checkpoint = trainer.checkpoint_dir / "last_checkpoint.pt"
+        # Vérifier si checkpoint.pt existe
+        checkpoint_path = trainer.checkpoint_dir / "checkpoint.pt"
         resume_training = False
         
-        if last_checkpoint.exists():
+        if checkpoint_path.exists():
             print("\n" + "="*70)
             print("📂 CHECKPOINT DÉTECTÉ")
             print("="*70)
             
-            # Afficher les checkpoints disponibles
-            list_checkpoints(trainer)
+            # Afficher les infos du checkpoint
+            info = trainer.get_checkpoint_info()
+            if info:
+                print(f"\n📊 Checkpoint actuel:")
+                print(f"   • Époque: {info['epoch']}")
+                print(f"   • Batch: {info['batch_idx']}")
+                print(f"   • Train Loss: {info['train_loss']:.4f}")
+                print(f"   • Val Loss: {info['val_loss']:.4f}")
+                print(f"   • Date: {info['timestamp']}")
             
-            response = input("\nReprendre l'entraînement depuis le dernier checkpoint? (o/n): ").lower().strip()
+            response = input("\n❓ Reprendre l'entraînement depuis ce checkpoint? (o/n): ").lower().strip()
             resume_training = response in ['o', 'oui', 'y', 'yes']
             
             if not resume_training:
-                response2 = input("Voulez-vous voir les checkpoints disponibles? (o/n): ").lower().strip()
-                if response2 in ['o', 'oui', 'y', 'yes']:
-                    list_checkpoints(trainer)
+                print("\n⚠️  L'entraînement repartira de zéro")
+                confirm = input("   Confirmer? (o/n): ").lower().strip()
+                if confirm not in ['o', 'oui', 'y', 'yes']:
+                    print("❌ Annulé")
+                    return
 
         print("\n🎯 Démarrage entraînement...")
 
@@ -1517,6 +1460,9 @@ def main():
             print(f"{'='*70}")
 
             trainer.train_one_cycle(resume_from_checkpoint=resume_training)
+            
+            # Après le premier cycle, on ne reprend plus
+            resume_training = False
 
         # Afficher les statistiques complètes
         trainer.display_stats()
@@ -1524,6 +1470,7 @@ def main():
         print("\n✅ Entraînement LoRA terminé avec succès!")
         print(f"📁 Modèle sauvegardé dans: {DEFAULT_MODEL_DIR}/model.pt")
         print(f"🔧 Poids LoRA dans: {DEFAULT_MODEL_DIR}/{LORA_WEIGHTS_FILENAME}")
+        print(f"📊 Checkpoint: {trainer.checkpoint_dir}/checkpoint.pt")
         print(f"📊 Historique: {DEFAULT_MODEL_DIR}/training_history.json")
         print(f"\n📈 Total de cycles complétés: {len(trainer.history['cycles'])}")
 
@@ -1551,8 +1498,15 @@ def main():
             print("💡 Vous pouvez lancer RLHF plus tard avec trainer.train_with_rlhf()")
 
         print("\n💡 Compatible avec app.py - Utilisez Flask pour tester!")
-        print("💡 Relancez ce script pour continuer l'entraînement sur un nouveau cycle!")
+        print("💡 Relancez ce script pour continuer l'entraînement (reprise automatique)!")
 
+    except KeyboardInterrupt:
+        print("\n\n⚠️  INTERRUPTION DÉTECTÉE")
+        print("="*70)
+        print("💾 Le dernier checkpoint a été sauvegardé automatiquement")
+        print("💡 Relancez le script pour reprendre l'entraînement")
+        print("="*70)
+        
     except Exception as e:
         print(f"\n❌ ERREUR CRITIQUE: {e}")
         import traceback
@@ -1562,6 +1516,7 @@ def main():
         print("   2. Les dimensions du modèle correspondent au tokenizer")
         print("   3. Vous avez suffisamment de VRAM (recommandé: 8GB+)")
         print("   4. Les datasets HuggingFace sont accessibles")
+        print("\n💾 Si un checkpoint existe, relancez pour reprendre")
         raise
 
 
