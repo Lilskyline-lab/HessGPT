@@ -1,7 +1,7 @@
 """
 Système d'entraînement avec LoRA (Low-Rank Adaptation) + Instruction Tuning
 VERSION CORRIGÉE avec CHECKPOINTING À NOMS FIXES
-
+#LoRAFineTuning.py
 Corrections principales:
 - ✅ Noms de fichiers FIXES (checkpoint.pt, model.pt, best_model.pt)
 - ✅ Reprise d'entraînement robuste
