@@ -7,7 +7,7 @@ Usage:
     python manage_checkpoints.py --compare      # Compare checkpoint vs best
     python manage_checkpoints.py --validate     # Valide l'intégrité
 """
-
+#manage_checkpoints.py
 import argparse
 import sys
 import os
