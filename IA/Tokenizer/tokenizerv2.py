@@ -1,3 +1,4 @@
+#tokenizerv2.py
 from tqdm import tqdm
 import argparse
 import pickle
@@ -395,5 +396,6 @@ if __name__ == "__main__":
     else:
         print("❌ Utilisez --train ou --use_tokenizer")
         exit(1)
+
 
 #python tokenizerv2.py --train --vocab_size 50000 --max_samples 10000 --save tokenizer_50k.bin
