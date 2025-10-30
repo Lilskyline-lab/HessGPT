@@ -15,7 +15,7 @@ sys.path.append('./IA/training/Embeddings_Layer')
 sys.path.append('./IA/Tokenizer')
 
 from HessGPT import HessGPT
-from tokenizer5k import MYBPE
+from tokenizerv2 import MYBPE
 
 app = Flask(__name__)
 CORS(app)
@@ -50,7 +50,7 @@ def load_model_and_tokenizer():
             return
 
         model_dir = "./IA/saved_models/my_llm"
-        tokenizer_path = "./IA/Tokenizer/tokenizer_5k.bin"
+        tokenizer_path = "./IA/Tokenizer/tokenizer_20k_production.bin"
         device = torch.device("cpu")
 
         config_path = os.path.join(model_dir, "config.json")
@@ -58,7 +58,7 @@ def load_model_and_tokenizer():
             config = json.load(f)
 
         print("🔤 Chargement du tokenizer...")
-        tokenizer = MYBPE(vocab_size=config.get("vocab_size", 5000))
+        tokenizer = MYBPE(vocab_size=config.get("vocab_size", 20000))
         old = silence_output()
         try:
             tokenizer.load_tokenizer(tokenizer_path, verbose=False)
@@ -68,11 +68,11 @@ def load_model_and_tokenizer():
 
         print("🤖 Initialisation du modèle...")
         model = HessGPT(
-            vocab_size=config.get("vocab_size", 5000),
-            embed_dim=config.get("embed_dim", 256),
-            num_heads=config.get("num_heads", 8),
-            num_layers=config.get("num_layers", 4),
-            max_seq_len=config.get("max_seq_len", 512)
+            vocab_size=config["vocab_size"],
+            embed_dim=config["embed_dim"],
+            num_heads=config["num_heads"],
+            num_layers=config["num_layers"],
+            max_seq_len=config["max_seq_len"]
         )
 
         model_file = os.path.join(model_dir, "model.pt")
@@ -81,8 +81,20 @@ def load_model_and_tokenizer():
                 state = torch.load(model_file, map_location=device, weights_only=True)
             except TypeError:
                 state = torch.load(model_file, map_location=device)
-            model.load_state_dict(state)
+            
+            # Vérifier la compatibilité
+            model_params = sum(p.numel() for p in model.parameters())
+            loaded_params = sum(p.numel() for p in state.values() if isinstance(p, torch.Tensor))
+            
             print(f"✅ Modèle chargé depuis {model_file}")
+            print(f"   📊 Paramètres modèle: {model_params:,}")
+            print(f"   📊 Paramètres chargés: {loaded_params:,}")
+            
+            model.load_state_dict(state)
+            
+            # Vérifier si les poids sont initialisés (pas tous à zéro)
+            first_param = next(iter(model.parameters()))
+            print(f"   🔍 Premier poids (sample): {first_param.flatten()[:5]}")
         else:
             print(f"⚠️ Fichier model.pt non trouvé. Le modèle utilisera des poids aléatoires.")
 
@@ -91,10 +103,10 @@ def load_model_and_tokenizer():
         model_loaded = True
         print("✅ Modèle prêt!")
 
-def generate_response(prompt, max_new_tokens=40, temperature=0.7, top_k=50, top_p=0.95, repetition_penalty=1.1):
+def generate_response(prompt, max_new_tokens=40, temperature=0.9, top_k=0, top_p=0.9, repetition_penalty=1.3):
     old = silence_output()
     try:
-        tokens = tokenizer.encoder(prompt, verbose=False)
+        tokens = tokenizer.encoder(prompt)
     finally:
         restore_output(old)
 
@@ -102,10 +114,15 @@ def generate_response(prompt, max_new_tokens=40, temperature=0.7, top_k=50, top_
     generated_ids = input_ids[0].tolist()
 
     with torch.no_grad():
-        for _ in range(max_new_tokens):
+        for step in range(max_new_tokens):
             inp = torch.tensor([generated_ids[-model.max_seq_len:]], device=device)
             logits, _ = model(inp)
             next_logits = logits[0, -1, :].float()
+            
+            # Debug: afficher les top 5 tokens prédits au premier step
+            if step == 0:
+                top_vals, top_ids = torch.topk(next_logits, 5)
+                print(f"   🎯 Top 5 tokens prédits: {top_ids.tolist()} (logits: {top_vals.tolist()})")
 
             if repetition_penalty != 1.0:
                 for t in set(generated_ids):
@@ -137,7 +154,7 @@ def generate_response(prompt, max_new_tokens=40, temperature=0.7, top_k=50, top_
 
     old = silence_output()
     try:
-        text = tokenizer.decoder(generated_ids, verbose=False)
+        text = tokenizer.decoder(generated_ids)
     finally:
         restore_output(old)
 
