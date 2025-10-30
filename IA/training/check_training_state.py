@@ -2,7 +2,7 @@
 """
 Script de vérification d'état d'entraînement - VERSION CORRIGÉE
 Usage: python check_training_state.py
-
+#check_training_state.py
 Vérifie les fichiers avec NOMS FIXES:
 - checkpoint.pt : État d'entraînement actuel
 - model.pt : Modèle fusionné
